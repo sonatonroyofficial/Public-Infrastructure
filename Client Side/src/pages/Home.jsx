@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { issueAPI } from '../utils/api';
+import { issueAPI, mapAPI } from '../utils/api';
+import BangladeshIssueMap from '../components/BangladeshIssueMap';
 import {
     FaLightbulb,
     FaRoad,
@@ -14,13 +15,20 @@ import {
     FaArrowRight,
     FaApple,
     FaGooglePlay,
-    FaMobileAlt
+    FaMobileAlt,
+    FaMapMarkedAlt
 } from 'react-icons/fa';
 
 const Home = () => {
     const { isAuthenticated, isCitizen } = useAuth();
     const [latestResolvedIssues, setLatestResolvedIssues] = useState([]);
     const [loadingIssues, setLoadingIssues] = useState(true);
+    const [mapStats, setMapStats] = useState({
+        totalIssues: 0,
+        criticalIssues: 0,
+        districtsCovered: 0,
+        resolvedIssues: 0
+    });
 
     useEffect(() => {
         const fetchResolvedIssues = async () => {
@@ -39,7 +47,34 @@ const Home = () => {
             }
         };
 
+        const fetchMapDistrictsStats = async () => {
+            try {
+                const res = await mapAPI.getDistricts();
+                const districts = res.data || [];
+                
+                let total = 0;
+                let critical = 0;
+                let resolved = 0;
+
+                districts.forEach(d => {
+                    total += (d.totalIssues || 0);
+                    critical += (d.bySeverity?.Critical || 0);
+                    resolved += (d.resolvedIssues || 0);
+                });
+
+                setMapStats({
+                    totalIssues: total,
+                    criticalIssues: critical,
+                    districtsCovered: districts.length,
+                    resolvedIssues: resolved
+                });
+            } catch (err) {
+                console.error("Failed to load map district stats", err);
+            }
+        };
+
         fetchResolvedIssues();
+        fetchMapDistrictsStats();
     }, []);
 
     const features = [
@@ -86,11 +121,11 @@ const Home = () => {
                             <div className="inline-flex items-center px-4 py-2 mb-6 bg-blue-50 border border-blue-100 rounded-full text-blue-700 font-semibold text-sm">
                                 <span className="mr-2">🏛️</span> Building Better Cities Together
                             </div>
-                            <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-slate-900 leading-tight mb-6">
+                            <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-5xl xl:text-6xl font-extrabold text-slate-900 leading-tight mb-6">
                                 Report Public <br className="hidden lg:block" /> Infrastructure
                                 <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent"> Issues Instantly</span>
                             </h1>
-                            <p className="text-xl text-slate-600 mb-8 leading-relaxed max-w-2xl mx-auto lg:mx-0">
+                            <p className="text-lg md:text-xl text-slate-600 mb-8 leading-relaxed max-w-2xl mx-auto lg:mx-0">
                                 Help improve your community by reporting broken streetlights, potholes,
                                 water leakage, and other infrastructure issues. Track progress in real-time.
                             </p>
@@ -110,25 +145,25 @@ const Home = () => {
                                 </Link>
                             </div>
 
-                            <div className="grid grid-cols-3 gap-8 py-8 border-t border-slate-100">
+                            <div className="grid grid-cols-3 gap-4 sm:gap-8 py-8 border-t border-slate-100">
                                 <div className="text-center">
-                                    <div className="text-3xl font-black text-slate-900">1000+</div>
-                                    <div className="text-sm text-slate-500 mt-1 uppercase tracking-wide font-semibold">Issues Reported</div>
+                                    <div className="text-2xl sm:text-3xl font-black text-slate-900">1000+</div>
+                                    <div className="text-xs sm:text-sm text-slate-500 mt-1 uppercase tracking-wide font-semibold">Issues Reported</div>
                                 </div>
                                 <div className="text-center border-l border-slate-100">
-                                    <div className="text-3xl font-black text-blue-600">850+</div>
-                                    <div className="text-sm text-slate-500 mt-1 uppercase tracking-wide font-semibold">Resolved</div>
+                                    <div className="text-2xl sm:text-3xl font-black text-blue-600">850+</div>
+                                    <div className="text-xs sm:text-sm text-slate-500 mt-1 uppercase tracking-wide font-semibold">Resolved</div>
                                 </div>
                                 <div className="text-center border-l border-slate-100">
-                                    <div className="text-3xl font-black text-emerald-500">95%</div>
-                                    <div className="text-sm text-slate-500 mt-1 uppercase tracking-wide font-semibold">Satisfaction</div>
+                                    <div className="text-2xl sm:text-3xl font-black text-emerald-500">95%</div>
+                                    <div className="text-xs sm:text-sm text-slate-500 mt-1 uppercase tracking-wide font-semibold">Satisfaction</div>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="relative h-[600px] hidden lg:block">
+                        <div className="relative h-[600px] hidden lg:block overflow-hidden rounded-2xl">
                             {/* Floating Cards simulating standard float animation */}
-                            <div className="absolute top-[15%] left-[10%] bg-white p-4 rounded-xl shadow-xl flex items-center gap-4 border border-slate-100 z-10 animate-pulse">
+                            <div className="absolute top-[15%] left-[5%] xl:left-[10%] bg-white p-4 rounded-xl shadow-xl flex items-center gap-4 border border-slate-100 z-10 animate-float-1">
                                 <div className="text-3xl">🚧</div>
                                 <div>
                                     <div className="font-bold text-slate-900">Pothole Reported</div>
@@ -136,7 +171,7 @@ const Home = () => {
                                 </div>
                             </div>
 
-                            <div className="absolute top-[50%] right-[10%] bg-white p-4 rounded-xl shadow-xl flex items-center gap-4 border border-slate-100 z-20 animate-bounce" style={{ animationDuration: '3s' }}>
+                            <div className="absolute top-[48%] right-2 xl:right-[10%] bg-white p-4 rounded-xl shadow-xl flex items-center gap-4 border border-slate-100 z-20 animate-float-2">
                                 <div className="text-3xl">💡</div>
                                 <div>
                                     <div className="font-bold text-slate-900">Streetlight Fixed</div>
@@ -144,7 +179,7 @@ const Home = () => {
                                 </div>
                             </div>
 
-                            <div className="absolute bottom-[20%] left-[20%] bg-white p-4 rounded-xl shadow-xl flex items-center gap-4 border border-slate-100 z-10 animate-ping" style={{ animationDuration: '4s' }}>
+                            <div className="absolute bottom-[18%] left-[12%] xl:left-[20%] bg-white p-4 rounded-xl shadow-xl flex items-center gap-4 border border-slate-100 z-10 animate-float-3">
                                 <div className="text-3xl">💧</div>
                                 <div>
                                     <div className="font-bold text-slate-900">Water Leak</div>
@@ -153,8 +188,54 @@ const Home = () => {
                             </div>
 
                             {/* Abstract Shapes */}
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-blue-100 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-purple-100 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] h-[350px] xl:w-[500px] xl:h-[500px] bg-blue-100 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] xl:w-[400px] xl:h-[400px] bg-purple-100 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            {/* Live Public Bangladesh Map Section (PHASE 4) */}
+            <section className="py-16 bg-slate-900 text-white relative overflow-hidden">
+                <div className="container mx-auto px-4 md:px-6 relative z-10">
+                    <div className="text-center max-w-3xl mx-auto mb-10">
+                        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-400/30 text-xs font-bold uppercase tracking-wider mb-4">
+                            <span>🗺️ Nationwide Transparency</span>
+                        </div>
+                        <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-white tracking-tight mb-4">
+                            Live Issues Across Bangladesh
+                        </h2>
+                        <p className="text-slate-300 text-base md:text-lg">
+                            Real-time view of reported public infrastructure problems nationwide. Click on any district to explore interactive report pins.
+                        </p>
+                    </div>
+
+                    {/* Shared Bangladesh Map (Mode: Public) */}
+                    <div className="mb-10 shadow-2xl rounded-2xl overflow-hidden">
+                        <BangladeshIssueMap mode="public" />
+                    </div>
+
+                    {/* 4 Summary Stat Cards calculated from GET /api/map/districts */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700/80 shadow-lg text-center">
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Total Issues</div>
+                            <div className="text-3xl md:text-4xl font-black text-blue-400">{mapStats.totalIssues}</div>
+                            <div className="text-[11px] text-slate-400 mt-1">Nationwide submissions</div>
+                        </div>
+                        <div className="bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700/80 shadow-lg text-center">
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Critical Hazards</div>
+                            <div className="text-3xl md:text-4xl font-black text-rose-400">{mapStats.criticalIssues}</div>
+                            <div className="text-[11px] text-slate-400 mt-1">Immediate safety risks</div>
+                        </div>
+                        <div className="bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700/80 shadow-lg text-center">
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Districts Covered</div>
+                            <div className="text-3xl md:text-4xl font-black text-purple-400">{mapStats.districtsCovered}</div>
+                            <div className="text-[11px] text-slate-400 mt-1">Of 64 Zillas reported</div>
+                        </div>
+                        <div className="bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700/80 shadow-lg text-center">
+                            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Resolved Issues</div>
+                            <div className="text-3xl md:text-4xl font-black text-emerald-400">{mapStats.resolvedIssues}</div>
+                            <div className="text-[11px] text-slate-400 mt-1">Actioned by authorities</div>
                         </div>
                     </div>
                 </div>

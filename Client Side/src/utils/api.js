@@ -54,7 +54,8 @@ export const issueAPI = {
     createIssue: (data) => api.post('/issues', data),
     getAllIssues: (params) => api.get('/issues', { params }),
     getIssueById: (id) => api.get(`/issues/${id}`),
-    assignIssue: (id, staffId) => api.put(`/issues/${id}/assign`, { staffId }),
+    getIssueStatus: (id) => api.get(`/issues/${id}/status`),
+    assignIssue: (id, staffId, internalNote) => api.put(`/issues/${id}/assign`, { staffId, internalNote }),
     rejectIssue: (id) => api.put(`/issues/${id}/reject`),
     updateStatus: (id, status, comment) => api.patch(`/issues/${id}/status`, { status, comment }),
     addComment: (id, comment) => api.post(`/issues/${id}/comments`, { comment }),
@@ -80,8 +81,18 @@ export const statsAPI = {
     getDashboardStats: () => api.get('/stats'),
 };
 
+// Map APIs (Phase 2)
+export const mapAPI = {
+    getDistricts: (params) => api.get('/map/districts', { params }),
+    getPins: (params) => api.get('/map/pins', { params }),
+};
+
 export const contactAPI = {
     sendMessage: (data) => api.post('/contact', data),
+};
+
+export const trackAPI = {
+    getReportByCode: (trackingCode) => api.get(`/reports/track/${trackingCode}`),
 };
 
 export default api;

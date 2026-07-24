@@ -175,44 +175,8 @@ const Profile = () => {
                         </div>
                     </div>
 
-                    {/* Right Column: Subscription & Status */}
+                    {/* Right Column: Account Status */}
                     <div className="space-y-8">
-                        {/* Subscription Card */}
-                        <div className={`rounded-2xl shadow-sm border p-6 ${user.isPremium ? 'bg-gradient-to-br from-gray-900 to-black text-white border-black' : 'bg-white border-gray-100'}`}>
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-lg font-bold flex items-center gap-2">
-                                    <FaCrown className={user.isPremium ? 'text-yellow-400' : 'text-gray-300'} />
-                                    Subscription
-                                </h3>
-                                {user.isPremium ? (
-                                    <span className="bg-yellow-500/20 text-yellow-400 text-xs font-bold px-2 py-1 rounded border border-yellow-500/30">ACTIVE</span>
-                                ) : (
-                                    <span className="bg-gray-100 text-gray-500 text-xs font-bold px-2 py-1 rounded">FREE</span>
-                                )}
-                            </div>
-
-                            {user.isPremium ? (
-                                <div>
-                                    <p className="text-gray-300 text-sm mb-4">You have unlimited access to report issues and report priority problems.</p>
-                                    <div className="text-xs text-gray-500">Member since {new Date(user.createdAt || Date.now()).toLocaleDateString()}</div>
-                                </div>
-                            ) : (
-                                <div>
-                                    <p className="text-gray-600 text-sm mb-4">Upgrade to Premium to report unlimited issues and get priority support.</p>
-                                    <div className="mb-4">
-                                        <span className="text-2xl font-bold text-gray-900">1000tk</span>
-                                        <span className="text-gray-500 text-sm"> / one-time</span>
-                                    </div>
-                                    <button
-                                        onClick={handleSubscribe}
-                                        disabled={loading}
-                                        className="w-full py-3 bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-500 hover:to-yellow-600 text-yellow-900 font-bold rounded-xl shadow-lg shadow-yellow-200 transition-all flex items-center justify-center gap-2"
-                                    >
-                                        {loading ? 'Processing...' : <><FaCreditCard /> Upgrade Now</>}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
 
                         {/* Account Status */}
                         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">

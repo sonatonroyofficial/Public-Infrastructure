@@ -4,6 +4,23 @@
 @theme {
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-display: 'Outfit', system-ui, sans-serif;
+  
+  --animate-float-1: float-1 5s ease-in-out infinite;
+  --animate-float-2: float-2 5.5s ease-in-out infinite;
+  --animate-float-3: float-3 6s ease-in-out infinite;
+
+  @keyframes float-1 {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  @keyframes float-2 {
+    0%, 100% { transform: translateY(-6px); }
+    50% { transform: translateY(6px); }
+  }
+  @keyframes float-3 {
+    0%, 100% { transform: translateY(-12px); }
+    50% { transform: translateY(0); }
+  }
 }
 
 body {

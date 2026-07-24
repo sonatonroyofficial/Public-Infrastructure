@@ -6,6 +6,8 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import admin from 'firebase-admin';
 import { createRequire } from "module";
+import { processReportAI } from './services/aiProcessingPipeline.js';
+
 const require = createRequire(import.meta.url);
 // Firebase Admin Setup
 const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT;
@@ -258,13 +260,22 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ message: 'Email and password are required' });
         }
 
-        // Find user
-        const user = await db.collection('users').findOne({ email });
+        const cleanEmail = (email || '').trim().toLowerCase();
+
+        // Find user (case-insensitive email lookup)
+        const user = await db.collection('users').findOne({
+            email: { $regex: `^${cleanEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }
+        });
+
         if (!user) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
-        // Check password
+        if (!user.password) {
+            return res.status(401).json({ message: 'Invalid email or password. Password not set for this account.' });
+        }
+
+        // Check password safely
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
             return res.status(401).json({ message: 'Invalid email or password' });
@@ -452,14 +463,16 @@ app.post('/api/issues', authenticateToken, authorizeRole('citizen'), async (req,
             }
         }
 
-        if (!title || !description || !category || !location) {
-            return res.status(400).json({ message: 'Title, description, category, and location are required' });
+        // Make category optional for submission
+        if (!title || !description || !location) {
+            return res.status(400).json({ message: 'Title, description, and location are required' });
         }
 
         const newIssue = {
             title,
             description,
-            category, // pothole, streetlight, water_leakage, garbage, footpath, other
+            category: category || 'other', // fallback if citizen didn't provide one
+            citizenSelectedCategory: category || null, // new field to track manual selection
             location: {
                 address: location.address || '',
                 latitude: location.latitude || 0,
@@ -485,7 +498,24 @@ app.post('/api/issues', authenticateToken, authorizeRole('citizen'), async (req,
                 }
             ],
             createdAt: new Date(),
-            updatedAt: new Date()
+            updatedAt: new Date(),
+
+            // New AI fields initialized as pending/empty
+            originalText: `${title} ${description}`,
+            detectedLanguage: '',
+            aiCategory: '',
+            aiCategoryConfidence: 0,
+            aiSummaryEn: '',
+            severityScore: 5,
+            severityLabel: 'Medium',
+            severityReason: 'AI analysis pending',
+            isIncomplete: false,
+            missingInfoNote: '',
+            duplicateOf: null,
+            duplicateConfidence: null,
+            duplicateStatus: 'none',
+            aiProcessedAt: null,
+            aiProcessingStatus: 'processing' // starts in processing state
         };
 
         // Get citizen name
@@ -496,6 +526,17 @@ app.post('/api/issues', authenticateToken, authorizeRole('citizen'), async (req,
 
         const result = await db.collection('issues').insertOne(newIssue);
 
+        // Trigger background AI processing pipeline asynchronously (fire-and-forget)
+        processReportAI(
+            result.insertedId.toString(),
+            title,
+            description,
+            location.address || '',
+            photos && photos.length > 0 ? photos[0] : null,
+            category || null,
+            db
+        );
+
         res.status(201).json({
             message: 'Issue reported successfully',
             issue: { ...newIssue, _id: result.insertedId }
@@ -505,6 +546,46 @@ app.post('/api/issues', authenticateToken, authorizeRole('citizen'), async (req,
         res.status(500).json({ message: 'Server error while creating issue' });
     }
 });
+
+// Get AI processing status of a report (for polling)
+app.get('/api/issues/:id/status', authenticateToken, async (req, res) => {
+    try {
+        if (!dbConnected) {
+            return res.status(503).json({ message: 'Database not connected' });
+        }
+
+        const issue = await db.collection('issues').findOne(
+            { _id: new ObjectId(req.params.id) },
+            { projection: { aiProcessingStatus: 1, category: 1, duplicateStatus: 1, duplicateOf: 1 } }
+        );
+
+        if (!issue) {
+            return res.status(404).json({ message: 'Issue not found' });
+        }
+
+        res.json({
+            aiProcessingStatus: issue.aiProcessingStatus || 'pending',
+            category: issue.category,
+            duplicateStatus: issue.duplicateStatus || 'none',
+            duplicateOf: issue.duplicateOf || null
+        });
+    } catch (error) {
+        console.error('Error fetching issue status:', error);
+        res.status(500).json({ message: 'Server error while checking status' });
+    }
+});
+
+// Alias routes for /api/reports compatibility
+app.post('/api/reports', authenticateToken, authorizeRole('citizen'), (req, res, next) => {
+    req.url = '/api/issues';
+    app.handle(req, res, next);
+});
+
+app.get('/api/reports/:id/status', authenticateToken, (req, res, next) => {
+    req.url = `/api/issues/${req.params.id}/status`;
+    app.handle(req, res, next);
+});
+
 
 // Get all issues (with filtering)
 app.get('/api/issues', async (req, res) => {
@@ -560,6 +641,341 @@ app.get('/api/issues', async (req, res) => {
     } catch (error) {
         console.error('Issue fetch error:', error);
         res.status(500).json({ message: 'Server error while fetching issues' });
+    }
+});
+
+// ============ MAP API ROUTES (PHASE 2) ============
+
+// GET /api/map/districts - Aggregated statistics per district for Live Map
+app.get('/api/map/districts', async (req, res) => {
+    try {
+        if (!dbConnected) {
+            return res.status(503).json({ message: 'Database not connected' });
+        }
+
+        const { category, severity, status, duplicateStatus } = req.query;
+
+        // Build $match stage
+        const matchStage = {
+            district: { $ne: null, $exists: true, $ne: '' }
+        };
+
+        if (category) {
+            matchStage.$or = [
+                { aiCategory: { $regex: category, $options: 'i' } },
+                { category: { $regex: category, $options: 'i' } }
+            ];
+        }
+
+        if (severity) {
+            if (severity.toLowerCase() === 'critical_high') {
+                matchStage.severityLabel = { $in: ['Critical', 'High'] };
+            } else {
+                matchStage.severityLabel = { $regex: severity, $options: 'i' };
+            }
+        }
+
+        if (status) {
+            if (status.toLowerCase() === 'open') {
+                matchStage.status = { $in: ['pending', 'assigned', 'in-progress'] };
+            } else {
+                matchStage.status = status.toLowerCase();
+            }
+        }
+
+        if (duplicateStatus) {
+            if (duplicateStatus === 'duplicate' || duplicateStatus === 'possible_duplicate') {
+                matchStage.duplicateStatus = { $in: ['possible_duplicate', 'confirmed_duplicate'] };
+            } else if (duplicateStatus === 'none') {
+                matchStage.duplicateStatus = { $in: ['none', null] };
+            }
+        }
+
+        const pipeline = [
+            { $match: matchStage },
+            {
+                $group: {
+                    _id: '$district',
+                    totalIssues: { $sum: 1 },
+                    avgSeverityScoreRaw: { $avg: { $ifNull: ['$severityScore', 1] } },
+
+                    // Categories breakdown
+                    potholeCount: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$aiCategory', ['Pothole']] }, 1, 0
+                            ]
+                        }
+                    },
+                    waterLeakCount: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$aiCategory', ['Water Leak']] }, 1, 0
+                            ]
+                        }
+                    },
+                    illegalDumpingCount: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$aiCategory', ['Illegal Dumping']] }, 1, 0
+                            ]
+                        }
+                    },
+                    brokenStreetlightCount: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$aiCategory', ['Broken Streetlight']] }, 1, 0
+                            ]
+                        }
+                    },
+                    damagedFootpathCount: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$aiCategory', ['Damaged Footpath']] }, 1, 0
+                            ]
+                        }
+                    },
+                    otherCategoryCount: {
+                        $sum: {
+                            $cond: [
+                                { $or: [{ $eq: ['$aiCategory', 'Other'] }, { $eq: [{ $ifNull: ['$aiCategory', ''] }, ''] }] }, 1, 0
+                            ]
+                        }
+                    },
+
+                    // Severity breakdown
+                    criticalCount: {
+                        $sum: { $cond: [{ $eq: ['$severityLabel', 'Critical'] }, 1, 0] }
+                    },
+                    highCount: {
+                        $sum: { $cond: [{ $eq: ['$severityLabel', 'High'] }, 1, 0] }
+                    },
+                    mediumCount: {
+                        $sum: { $cond: [{ $eq: ['$severityLabel', 'Medium'] }, 1, 0] }
+                    },
+                    lowCount: {
+                        $sum: {
+                            $cond: [
+                                { $or: [{ $eq: ['$severityLabel', 'Low'] }, { $eq: [{ $ifNull: ['$severityLabel', ''] }, ''] }] }, 1, 0
+                            ]
+                        }
+                    },
+
+                    // Status breakdown
+                    openIssues: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$status', ['pending', 'assigned', 'in-progress']] }, 1, 0
+                            ]
+                        }
+                    },
+                    resolvedIssues: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$status', ['resolved', 'closed']] }, 1, 0
+                            ]
+                        }
+                    }
+                }
+            },
+            { $sort: { totalIssues: -1 } }
+        ];
+
+        const aggregatedDistricts = await db.collection('issues').aggregate(pipeline).toArray();
+
+        const formattedResult = aggregatedDistricts.map(item => ({
+            district: item._id,
+            totalIssues: item.totalIssues,
+            byCategory: {
+                "Pothole": item.potholeCount,
+                "Water Leak": item.waterLeakCount,
+                "Illegal Dumping": item.illegalDumpingCount,
+                "Broken Streetlight": item.brokenStreetlightCount,
+                "Damaged Footpath": item.damagedFootpathCount,
+                "Other": item.otherCategoryCount
+            },
+            bySeverity: {
+                "Critical": item.criticalCount,
+                "High": item.highCount,
+                "Medium": item.mediumCount,
+                "Low": item.lowCount
+            },
+            avgSeverityScore: Number((item.avgSeverityScoreRaw || 1).toFixed(1)),
+            openIssues: item.openIssues,
+            resolvedIssues: item.resolvedIssues
+        }));
+
+        res.json(formattedResult);
+    } catch (error) {
+        console.error('Error fetching map districts aggregation:', error);
+        res.status(500).json({ message: 'Server error fetching map districts data' });
+    }
+});
+
+// GET /api/map/pins - Individual report pins for interactive map
+app.get('/api/map/pins', async (req, res) => {
+    try {
+        if (!dbConnected) {
+            return res.status(503).json({ message: 'Database not connected' });
+        }
+
+        const { district, category, severity, status, duplicateStatus } = req.query;
+
+        const query = {
+            latitude: { $ne: null, $exists: true, $ne: 0 },
+            longitude: { $ne: null, $exists: true, $ne: 0 }
+        };
+
+        if (district) {
+            query.district = { $regex: district, $options: 'i' };
+        }
+
+        if (category) {
+            query.$or = [
+                { aiCategory: { $regex: category, $options: 'i' } },
+                { category: { $regex: category, $options: 'i' } }
+            ];
+        }
+
+        if (severity) {
+            if (severity.toLowerCase() === 'critical_high') {
+                query.severityLabel = { $in: ['Critical', 'High'] };
+            } else {
+                query.severityLabel = { $regex: severity, $options: 'i' };
+            }
+        }
+
+        if (status) {
+            if (status.toLowerCase() === 'open') {
+                query.status = { $in: ['pending', 'assigned', 'in-progress'] };
+            } else {
+                query.status = status.toLowerCase();
+            }
+        }
+
+        if (duplicateStatus) {
+            if (duplicateStatus === 'duplicate' || duplicateStatus === 'possible_duplicate') {
+                query.duplicateStatus = { $in: ['possible_duplicate', 'confirmed_duplicate'] };
+            } else if (duplicateStatus === 'none') {
+                query.duplicateStatus = { $in: ['none', null] };
+            }
+        }
+
+        // Projection explicitly EXCLUDES sensitive citizen details (privacy rule)
+        const pins = await db.collection('issues').find(query, {
+            projection: {
+                _id: 1,
+                title: 1,
+                latitude: 1,
+                longitude: 1,
+                district: 1,
+                aiCategory: 1,
+                specificIssueLabel: 1,
+                severityLabel: 1,
+                severityScore: 1,
+                status: 1,
+                aiSummaryEn: 1,
+                duplicateStatus: 1,
+                duplicateOf: 1,
+                createdAt: 1
+            }
+        }).sort({ createdAt: -1 }).toArray();
+
+        const formattedPins = pins.map(pin => ({
+            id: pin._id.toString(),
+            trackingCode: pin._id.toString().substring(0, 8).toUpperCase(),
+            title: pin.title || 'Infrastructure Issue',
+            latitude: pin.latitude,
+            longitude: pin.longitude,
+            district: pin.district || 'Unknown',
+            aiCategory: pin.aiCategory || 'Other',
+            specificIssueLabel: pin.specificIssueLabel || pin.aiCategory || 'Infrastructure Issue',
+            severityLabel: pin.severityLabel || 'Low',
+            severityScore: pin.severityScore || 1,
+            status: pin.status || 'pending',
+            duplicateStatus: pin.duplicateStatus || 'none',
+            duplicateOf: pin.duplicateOf ? pin.duplicateOf.toString() : null,
+            aiSummaryEn: pin.aiSummaryEn || pin.title || '',
+            submittedAt: pin.createdAt ? pin.createdAt.toISOString() : new Date().toISOString()
+        }));
+
+        res.json(formattedPins);
+    } catch (error) {
+        console.error('Error fetching map pins:', error);
+        res.status(500).json({ message: 'Server error fetching map pins' });
+    }
+});
+
+// GET /api/reports/track/:trackingCode - PUBLIC report tracking lookup (No Auth Required)
+app.get('/api/reports/track/:trackingCode', async (req, res) => {
+    try {
+        if (!dbConnected) {
+            return res.status(503).json({ message: 'Database not connected' });
+        }
+
+        const rawCode = (req.params.trackingCode || '').trim();
+
+        if (!rawCode) {
+            return res.status(400).json({ message: 'Tracking code is required' });
+        }
+
+        const cleanCode = rawCode.toUpperCase();
+        let issue = null;
+
+        // 1. Try matching by 24-char ObjectId if valid
+        if (ObjectId.isValid(rawCode) && rawCode.length === 24) {
+            issue = await db.collection('issues').findOne({ _id: new ObjectId(rawCode) });
+        }
+
+        // 2. If not found by 24-char ObjectId, try matching by 8-character prefix of _id
+        if (!issue) {
+            issue = await db.collection('issues').findOne({
+                $expr: {
+                    $eq: [
+                        { $toUpper: { $substr: [{ $toString: "$_id" }, 0, cleanCode.length] } },
+                        cleanCode
+                    ]
+                }
+            });
+        }
+
+        if (!issue) {
+            return res.status(404).json({
+                found: false,
+                message: 'No report found with this tracking code — please check the code and try again.'
+            });
+        }
+
+        // Sanitize status history to remove sensitive citizen email addresses
+        const cleanHistory = Array.isArray(issue.statusHistory) ? issue.statusHistory.map(h => ({
+            status: h.status || 'updated',
+            updatedByRole: h.updatedByRole || 'system',
+            timestamp: h.timestamp ? new Date(h.timestamp).toISOString() : new Date().toISOString(),
+            comment: h.comment || `Status updated to ${h.status}`
+        })) : [];
+
+        // Return ONLY public-safe fields (Privacy Rule Enforcement)
+        const trackingDetails = {
+            found: true,
+            id: issue._id.toString(),
+            trackingCode: issue._id.toString().substring(0, 8).toUpperCase(),
+            title: issue.title || 'Infrastructure Report',
+            aiCategory: issue.aiCategory || issue.category || 'Other',
+            specificIssueLabel: issue.specificIssueLabel || issue.aiCategory || issue.category || 'Infrastructure Issue',
+            severityLabel: issue.severityLabel || 'Medium',
+            severityScore: issue.severityScore || 5,
+            status: issue.status || 'pending',
+            assignedStaffName: issue.assignedStaffName || null,
+            aiSummaryEn: issue.aiSummaryEn || issue.description || '',
+            submittedAt: issue.createdAt ? new Date(issue.createdAt).toISOString() : new Date().toISOString(),
+            updatedAt: issue.updatedAt ? new Date(issue.updatedAt).toISOString() : new Date().toISOString(),
+            statusHistory: cleanHistory
+        };
+
+        res.json(trackingDetails);
+    } catch (error) {
+        console.error('Error tracking issue by code:', error);
+        res.status(500).json({ message: 'Server error processing tracking lookup' });
     }
 });
 
@@ -683,14 +1099,15 @@ app.post('/api/payment/subscribe', authenticateToken, async (req, res) => {
     }
 });
 
-// Assign issue to staff (Admin only)
+// Assign issue to staff (Admin only - PATCH)
 app.patch('/api/issues/:id/assign', authenticateToken, authorizeRole('admin'), async (req, res) => {
     try {
         if (!dbConnected) {
             return res.status(503).json({ message: 'Database not connected' });
         }
 
-        const { staffId } = req.body;
+        const { staffId, internalNote, note } = req.body;
+        const noteText = (internalNote || note || '').trim();
 
         if (!staffId) {
             return res.status(400).json({ message: 'Staff ID is required' });
@@ -706,12 +1123,18 @@ app.patch('/api/issues/:id/assign', authenticateToken, authorizeRole('admin'), a
             return res.status(404).json({ message: 'Staff member not found' });
         }
 
+        const historyComment = noteText
+            ? `Assigned to ${staff.name} — Note: "${noteText}"`
+            : `Issue assigned to Staff: ${staff.name}`;
+
         const result = await db.collection('issues').updateOne(
             { _id: new ObjectId(req.params.id) },
             {
                 $set: {
                     assignedTo: new ObjectId(staffId),
                     assignedStaffName: staff.name,
+                    internalNote: noteText,
+                    adminNote: noteText,
                     status: 'assigned',
                     updatedAt: new Date()
                 },
@@ -720,8 +1143,11 @@ app.patch('/api/issues/:id/assign', authenticateToken, authorizeRole('admin'), a
                         status: 'assigned',
                         updatedBy: req.user.email,
                         updatedByRole: req.user.role,
+                        changedBy: req.user.userId,
+                        changedByName: req.user.name,
+                        comment: historyComment,
                         timestamp: new Date(),
-                        comment: `Issue assigned to Staff: ${staff.name}`
+                        date: new Date()
                     }
                 }
             }
@@ -731,7 +1157,7 @@ app.patch('/api/issues/:id/assign', authenticateToken, authorizeRole('admin'), a
             return res.status(404).json({ message: 'Issue not found' });
         }
 
-        res.json({ message: 'Issue assigned successfully' });
+        res.json({ message: `Issue assigned to ${staff.name} successfully` });
     } catch (error) {
         console.error('Issue assignment error:', error);
         res.status(500).json({ message: 'Server error' });
@@ -792,12 +1218,14 @@ app.patch('/api/issues/:id/status', authenticateToken, authorizeRole('staff', 'a
     }
 });
 
-// Assign Staff to Issue
+// Assign Staff to Issue (PUT)
 app.put('/api/issues/:id/assign', authenticateToken, authorizeRole('admin'), async (req, res) => {
     try {
         if (!dbConnected) return res.status(503).json({ message: 'Database not connected' });
 
-        const { staffId } = req.body;
+        const { staffId, internalNote, note } = req.body;
+        const noteText = (internalNote || note || '').trim();
+
         if (!staffId) return res.status(400).json({ message: 'Staff ID is required' });
 
         const staff = await db.collection('users').findOne({ _id: new ObjectId(staffId), role: 'staff' });
@@ -806,15 +1234,16 @@ app.put('/api/issues/:id/assign', authenticateToken, authorizeRole('admin'), asy
         const issue = await db.collection('issues').findOne({ _id: new ObjectId(req.params.id) });
         if (!issue) return res.status(404).json({ message: 'Issue not found' });
 
-        // Check if already assigned
-        if (issue.assignedTo) {
-            return res.status(400).json({ message: 'Issue is already assigned' });
-        }
+        const historyComment = noteText
+            ? `Assigned to ${staff.name} — Note: "${noteText}"`
+            : `Assigned to staff: ${staff.name}`;
 
         const updateDoc = {
             $set: {
                 assignedTo: staffId.toString(),
                 assignedStaffName: staff.name,
+                internalNote: noteText,
+                adminNote: noteText,
                 status: 'assigned', // Workflow: Pending -> Assigned -> In Progress
                 updatedAt: new Date()
             },
@@ -823,7 +1252,10 @@ app.put('/api/issues/:id/assign', authenticateToken, authorizeRole('admin'), asy
                     status: 'assigned',
                     changedBy: req.user.userId,
                     changedByName: req.user.name,
-                    comment: `Assigned to staff: ${staff.name}`,
+                    updatedBy: req.user.email,
+                    updatedByRole: req.user.role,
+                    comment: historyComment,
+                    timestamp: new Date(),
                     date: new Date()
                 }
             }
@@ -1051,38 +1483,57 @@ app.post('/api/staff', authenticateToken, authorizeRole('admin'), async (req, re
 
         const { name, email, password, phone, address } = req.body;
 
-        // 1. Create user in Firebase Authentication
-        let firebaseUser;
-        try {
-            firebaseUser = await admin.auth().createUser({
-                email,
-                password,
-                displayName: name,
-            });
-        } catch (firebaseError) {
-            console.error('Firebase creation error:', firebaseError);
-            return res.status(400).json({ message: 'Error creating user in Firebase: ' + firebaseError.message });
+        if (!name || !email || !password) {
+            return res.status(400).json({ message: 'Name, email, and password are required' });
         }
 
-        // 2. Create user in MongoDB
+        const cleanEmail = email.trim().toLowerCase();
+
+        // Check if user with this email already exists in MongoDB
+        const existingUser = await db.collection('users').findOne({ email: cleanEmail });
+        if (existingUser) {
+            return res.status(400).json({ message: 'User with this email already exists' });
+        }
+
+        // Hash password for JWT login verification
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // 1. Create user in Firebase Authentication (if configured)
+        let firebaseUid = null;
+        try {
+            if (admin && admin.auth) {
+                const firebaseUser = await admin.auth().createUser({
+                    email: cleanEmail,
+                    password,
+                    displayName: name,
+                });
+                firebaseUid = firebaseUser.uid;
+            }
+        } catch (firebaseError) {
+            console.warn('Firebase user creation note:', firebaseError.message);
+        }
+
+        // 2. Create user in MongoDB with hashed password
         const newUser = {
-            name,
-            email,
+            name: name.trim(),
+            email: cleanEmail,
+            password: hashedPassword, // Hashed password stored for JWT auth login
             role: 'staff', // Enforce staff role
-            phone,
-            address,
-            firebaseUid: firebaseUser.uid,
+            phone: phone || '',
+            address: address || '',
+            firebaseUid: firebaseUid,
             isPremium: false,
             isBlocked: false,
-            createdAt: new Date()
+            createdAt: new Date(),
+            updatedAt: new Date()
         };
 
         const result = await db.collection('users').insertOne(newUser);
 
-        res.status(201).json({ message: 'Staff created successfully', userId: result.insertedId });
+        res.status(201).json({ message: 'Staff member created successfully', userId: result.insertedId });
     } catch (error) {
         console.error('Create staff error:', error);
-        res.status(500).json({ message: 'Server error' });
+        res.status(500).json({ message: 'Server error creating staff: ' + (error.message || 'Unknown error') });
     }
 });
 

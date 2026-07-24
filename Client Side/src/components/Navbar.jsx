@@ -16,7 +16,8 @@ import {
     FaPlusCircle,
     FaUsers,
     FaUserShield,
-    FaMoneyBill
+    FaMoneyBill,
+    FaSearch
 } from 'react-icons/fa';
 
 const Navbar = () => {
@@ -72,6 +73,9 @@ const Navbar = () => {
                     </Link>
                     <Link to="/issues" className="flex items-center gap-2 text-gray-600 font-medium hover:text-blue-600 transition-colors">
                         <FaList /> All Issues
+                    </Link>
+                    <Link to="/track" className="flex items-center gap-2 text-blue-600 font-bold bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-100 transition-colors">
+                        <FaSearch /> Track Issue
                     </Link>
                     <Link to="/about" className="flex items-center gap-2 text-gray-600 font-medium hover:text-blue-600 transition-colors">
                         <FaInfoCircle /> About
@@ -141,13 +145,6 @@ const Navbar = () => {
                                                     onClick={() => setIsProfileDropdownOpen(false)}
                                                 >
                                                     <FaUserShield /> Manage Staff
-                                                </Link>
-                                                <Link
-                                                    to="/payments"
-                                                    className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 rounded-lg transition-colors"
-                                                    onClick={() => setIsProfileDropdownOpen(false)}
-                                                >
-                                                    <FaMoneyBill /> Payments
                                                 </Link>
                                             </>
                                         )}
@@ -226,6 +223,9 @@ const Navbar = () => {
                         <Link to="/issues" className="flex items-center gap-3 px-4 py-3 text-gray-900 font-medium hover:bg-gray-50 rounded-xl !text-black !opacity-100 !visible" style={{ color: 'black' }} onClick={closeMobileMenu}>
                             <FaList /> All Issues
                         </Link>
+                        <Link to="/track" className="flex items-center gap-3 px-4 py-3 text-blue-600 font-bold bg-blue-50 rounded-xl" onClick={closeMobileMenu}>
+                            <FaSearch /> Track Issue
+                        </Link>
                         <Link to="/about" className="flex items-center gap-3 px-4 py-3 text-gray-900 font-medium hover:bg-gray-50 rounded-xl !text-black !opacity-100 !visible" style={{ color: 'black' }} onClick={closeMobileMenu}>
                             <FaInfoCircle /> About
                         </Link>
@@ -256,9 +256,6 @@ const Navbar = () => {
                                         </Link>
                                         <Link to="/manage-staff" className="flex items-center gap-3 px-4 py-3 text-gray-700 font-medium hover:bg-gray-50 rounded-xl" onClick={closeMobileMenu}>
                                             <FaUserShield /> Manage Staff
-                                        </Link>
-                                        <Link to="/payments" className="flex items-center gap-3 px-4 py-3 text-gray-700 font-medium hover:bg-gray-50 rounded-xl" onClick={closeMobileMenu}>
-                                            <FaMoneyBill /> Payments
                                         </Link>
                                     </>
                                 )}

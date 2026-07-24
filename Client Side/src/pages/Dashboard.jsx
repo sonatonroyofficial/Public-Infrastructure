@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { issueAPI, userAPI, statsAPI } from '../utils/api';
+import BangladeshIssueMap from '../components/BangladeshIssueMap';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -13,7 +15,8 @@ import {
     FaFilter,
     FaChartLine,
     FaClipboardList,
-    FaUserTie
+    FaUserTie,
+    FaTrash
 } from 'react-icons/fa';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
@@ -21,7 +24,44 @@ const Dashboard = () => {
     const { user } = useAuth();
     const queryClient = useQueryClient();
     const [filterStatus, setFilterStatus] = useState('all');
+    const [filterSeverity, setFilterSeverity] = useState('all');
+    const [filterDuplicate, setFilterDuplicate] = useState('all');
+    const [sortBy, setSortBy] = useState('severityScoreDesc');
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Map Filter States (PHASE 5 & 6)
+    const [mapCategory, setMapCategory] = useState('');
+    const [mapSeverity, setMapSeverity] = useState('');
+    const [mapDuplicate, setMapDuplicate] = useState('');
+    const [mapStatus, setMapStatus] = useState('');
+    const [isCriticalOnly, setIsCriticalOnly] = useState(false);
+    const [mapRefreshKey, setMapRefreshKey] = useState(0);
+    const [lastRefreshedAt, setLastRefreshedAt] = useState(new Date());
+
+    // 60-second auto-refresh for map data
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setMapRefreshKey(prev => prev + 1);
+            setLastRefreshedAt(new Date());
+        }, 60000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const handleManualRefreshMap = () => {
+        setMapRefreshKey(prev => prev + 1);
+        setLastRefreshedAt(new Date());
+        toast.success('Map data refreshed!');
+    };
+
+    const toggleCriticalOnly = () => {
+        if (!isCriticalOnly) {
+            setIsCriticalOnly(true);
+            setMapSeverity('critical_high');
+        } else {
+            setIsCriticalOnly(false);
+            setMapSeverity('');
+        }
+    };
 
     // Fetch Dashboard Stats
     const { data: stats, isLoading: statsLoading, isError: statsError, refetch: refetchStats } = useQuery({
@@ -39,16 +79,27 @@ const Dashboard = () => {
     const { data: staff = [] } = useQuery({
         queryKey: ['staffUsers'],
         queryFn: () => userAPI.getAllUsers({ role: 'staff' }).then(res => res.data.users || []),
-        enabled: user.role === 'admin'
+        enabled: Boolean(user?.role === 'admin')
+    });
+
+    // Assign Modal State
+    const [assignModal, setAssignModal] = useState({
+        isOpen: false,
+        issueId: null,
+        issueTitle: '',
+        staffId: '',
+        staffName: '',
+        internalNote: ''
     });
 
     // Assign Issue Mutation
     const assignMutation = useMutation({
-        mutationFn: ({ issueId, staffId }) => issueAPI.assignIssue(issueId, staffId),
+        mutationFn: ({ issueId, staffId, internalNote }) => issueAPI.assignIssue(issueId, staffId, internalNote),
         onSuccess: () => {
             queryClient.invalidateQueries(['allIssues']);
             queryClient.invalidateQueries(['dashboardStats']);
-            toast.success('Issue assigned successfully!');
+            setAssignModal({ isOpen: false, issueId: null, issueTitle: '', staffId: '', staffName: '', internalNote: '' });
+            toast.success('Issue assigned to staff successfully!');
         },
         onError: (error) => {
             toast.error('Error assigning issue: ' + (error.response?.data?.message || error.message));
@@ -68,24 +119,115 @@ const Dashboard = () => {
         }
     });
 
-    const handleAssignIssue = (issueId, staffId) => {
-        assignMutation.mutate({ issueId, staffId });
+    // Delete Issue Mutation
+    const deleteMutation = useMutation({
+        mutationFn: (issueId) => issueAPI.deleteIssue(issueId),
+        onSuccess: () => {
+            queryClient.invalidateQueries(['allIssues']);
+            queryClient.invalidateQueries(['dashboardStats']);
+            toast.success('Issue deleted successfully!');
+        },
+        onError: (error) => {
+            toast.error('Error deleting issue: ' + (error.response?.data?.message || error.message));
+        }
+    });
+
+    const handleAssignIssue = (issue, staffId) => {
+        const foundStaff = staff.find(s => s._id === staffId);
+        setAssignModal({
+            isOpen: true,
+            issueId: issue._id,
+            issueTitle: issue.title || 'Untitled Issue',
+            staffId: staffId,
+            staffName: foundStaff ? foundStaff.name : '',
+            internalNote: ''
+        });
+    };
+
+    const handleConfirmAssign = () => {
+        if (!assignModal.staffId) {
+            toast.error('Please select a staff member');
+            return;
+        }
+        assignMutation.mutate({
+            issueId: assignModal.issueId,
+            staffId: assignModal.staffId,
+            internalNote: assignModal.internalNote
+        });
     };
 
     const handleUpdateStatus = (issueId, status) => {
         statusMutation.mutate({ issueId, status });
     };
 
+    const handleDeleteIssue = (issueId) => {
+        if (window.confirm('Are you sure you want to delete this issue report? This action cannot be undone.')) {
+            deleteMutation.mutate(issueId);
+        }
+    };
+
+    const canDeleteIssue = (issue) => {
+        if (!user) return false;
+        if (user?.role === 'admin') return true;
+        
+        const currentUserId = String(user?.userId || user?._id || user?.id || '');
+        const issueCitizenId = String(
+            typeof issue.citizenId === 'object'
+                ? (issue.citizenId?._id || issue.citizenId?.toString() || '')
+                : (issue.citizenId || '')
+        );
+
+        const isOwner = (currentUserId && issueCitizenId && currentUserId === issueCitizenId) ||
+                        (user?.email && issue.citizenEmail && user.email.toLowerCase() === issue.citizenEmail.toLowerCase());
+
+        return isOwner && issue.status === 'pending';
+    };
+
+    const myIssueIds = Array.isArray(issues) ? issues
+        .filter(i => {
+            if (!user) return false;
+            const currentUserId = String(user?.userId || user?._id || user?.id || '');
+            const issueCitizenId = String(
+                typeof i.citizenId === 'object'
+                    ? (i.citizenId?._id || i.citizenId?.toString() || '')
+                    : (i.citizenId || '')
+            );
+            return (currentUserId && issueCitizenId && currentUserId === issueCitizenId) ||
+                   (user?.email && i.citizenEmail && user.email.toLowerCase() === i.citizenEmail.toLowerCase());
+        })
+        .map(i => (i._id ? i._id.toString() : i.id)) : [];
+
     const isLoading = statsLoading || issuesLoading;
 
     const filteredIssues = Array.isArray(issues) ? issues.filter(issue => {
         const matchesStatus = filterStatus === 'all' || issue.status === filterStatus;
+        const matchesSeverity = filterSeverity === 'all' || (issue.severityLabel || 'Low').toLowerCase() === filterSeverity.toLowerCase();
+        
+        let matchesDuplicate = true;
+        if (filterDuplicate === 'duplicate') {
+            matchesDuplicate = issue.duplicateStatus === 'possible_duplicate' || issue.duplicateStatus === 'confirmed_duplicate';
+        } else if (filterDuplicate === 'none') {
+            matchesDuplicate = !issue.duplicateStatus || issue.duplicateStatus === 'none';
+        }
+
         const matchesSearch = (issue.title?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-            (issue.description?.toLowerCase() || '').includes(searchTerm.toLowerCase());
-        return matchesStatus && matchesSearch;
+            (issue.description?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+            (issue.aiSummaryEn?.toLowerCase() || '').includes(searchTerm.toLowerCase());
+            
+        return matchesStatus && matchesSeverity && matchesDuplicate && matchesSearch;
     }) : [];
 
-    if (isLoading) {
+    const sortedIssues = [...filteredIssues].sort((a, b) => {
+        if (sortBy === 'severityScoreDesc') {
+            return (b.severityScore || 0) - (a.severityScore || 0);
+        }
+        if (sortBy === 'createdAtDesc') {
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        }
+        return 0;
+    });
+
+    if (!user || isLoading) {
         return (
             <div className="flex justify-center items-center min-h-[calc(100vh-72px)]">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -151,14 +293,14 @@ const Dashboard = () => {
                         </div>
                     </div>
 
-                    {/* Admin: Revenue / Staff: Resolved */}
+                    {/* Resolved Issues */}
                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
                         <div>
                             <p className="text-sm font-medium text-gray-500 mb-1">
-                                {user.role === 'admin' ? 'Total Revenue' : 'Resolved'}
+                                Resolved Issues
                             </p>
                             <h3 className="text-3xl font-bold text-gray-900">
-                                {user.role === 'admin' ? `${stats.revenue || 0} tk` : (stats.issues?.resolved || 0)}
+                                {stats.issues?.resolved || 0}
                             </h3>
                         </div>
                         <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600">
@@ -182,6 +324,133 @@ const Dashboard = () => {
                     </div>
                 </div>
             )}
+
+            {/* Interactive Map with My Reports Highlight & Admin Triage Filters (PHASE 5 & 6) */}
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <h3 className="text-xl font-extrabold text-gray-900 flex items-center gap-2">
+                                <span>🗺️</span> {user.role === 'citizen' ? 'My Area & Live Issues Map' : 'National Infrastructure Overview Map'}
+                            </h3>
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                                Live Sync (60s)
+                            </span>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-0.5">
+                            {user.role === 'citizen'
+                                ? 'Explore reported issues nationwide. Your submitted reports are highlighted with golden star (★) markers.'
+                                : 'National spatial analysis, critical hazard triage, duplicate clusters & report management click-through.'}
+                        </p>
+                    </div>
+
+                    {/* Filter Controls & Management Bar */}
+                    <div className="flex flex-wrap items-center gap-2">
+                        {/* Triage Toggle: Critical & High Only */}
+                        <button
+                            onClick={toggleCriticalOnly}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${isCriticalOnly ? 'bg-rose-600 text-white shadow-md' : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'}`}
+                        >
+                            <span>🚨</span> Critical & High Only
+                        </button>
+
+                        <select
+                            value={mapCategory}
+                            onChange={(e) => setMapCategory(e.target.value)}
+                            className="text-xs font-medium border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 hover:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+                        >
+                            <option value="">All Categories</option>
+                            <option value="Pothole">Pothole</option>
+                            <option value="Water Leak">Water Leak</option>
+                            <option value="Illegal Dumping">Illegal Dumping</option>
+                            <option value="Broken Streetlight">Broken Streetlight</option>
+                            <option value="Damaged Footpath">Damaged Footpath</option>
+                            <option value="Other">Other</option>
+                        </select>
+
+                        <select
+                            value={mapSeverity}
+                            onChange={(e) => {
+                                setMapSeverity(e.target.value);
+                                setIsCriticalOnly(e.target.value === 'critical_high');
+                            }}
+                            className="text-xs font-medium border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 hover:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+                        >
+                            <option value="">All Severity</option>
+                            <option value="critical_high">🚨 Critical & High Only</option>
+                            <option value="Critical">Critical</option>
+                            <option value="High">High</option>
+                            <option value="Medium">Medium</option>
+                            <option value="Low">Low</option>
+                        </select>
+
+                        <select
+                            value={mapStatus}
+                            onChange={(e) => setMapStatus(e.target.value)}
+                            className="text-xs font-medium border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 hover:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+                        >
+                            <option value="">All Status</option>
+                            <option value="open">Open (Active)</option>
+                            <option value="resolved">Resolved</option>
+                            <option value="closed">Closed</option>
+                        </select>
+
+                        {user.role === 'admin' && (
+                            <select
+                                value={mapDuplicate}
+                                onChange={(e) => setMapDuplicate(e.target.value)}
+                                className="text-xs font-medium border border-purple-200 rounded-lg px-3 py-2 bg-purple-50 text-purple-900 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-colors"
+                            >
+                                <option value="">All Duplicates</option>
+                                <option value="duplicate">🔗 Possible/Confirmed Duplicates</option>
+                                <option value="none">Original Reports Only</option>
+                            </select>
+                        )}
+
+                        <button
+                            onClick={handleManualRefreshMap}
+                            title="Refresh Map Data"
+                            className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                            🔄 Refresh
+                        </button>
+
+                        {(mapCategory || mapSeverity || mapStatus || mapDuplicate || isCriticalOnly) && (
+                            <button
+                                onClick={() => {
+                                    setMapCategory('');
+                                    setMapSeverity('');
+                                    setMapStatus('');
+                                    setMapDuplicate('');
+                                    setIsCriticalOnly(false);
+                                }}
+                                className="text-xs text-blue-600 font-semibold hover:underline px-2 cursor-pointer"
+                            >
+                                Reset Filters
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                <div key={mapRefreshKey}>
+                    <BangladeshIssueMap
+                        mode={user.role === 'admin' ? 'admin' : user.role === 'staff' ? 'staff' : 'citizen'}
+                        myReportIds={myIssueIds}
+                        filters={{
+                            category: mapCategory,
+                            severity: mapSeverity,
+                            status: mapStatus,
+                            duplicateStatus: mapDuplicate
+                        }}
+                    />
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-gray-400 border-t border-gray-100 pt-2 px-1">
+                    <span>Click any pin to manage issue details & assign staff.</span>
+                    <span>Last updated: {lastRefreshedAt.toLocaleTimeString()}</span>
+                </div>
+            </div>
 
             {/* Staff Charts Section */}
             {user.role === 'staff' && stats && (
@@ -222,22 +491,21 @@ const Dashboard = () => {
                         Manage Issues
                     </h2>
 
-                    <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex flex-wrap gap-3">
                         <div className="relative">
                             <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                             <input
                                 type="text"
                                 placeholder="Search issues..."
-                                className="pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64"
+                                className="pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-48"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                             />
                         </div>
 
                         <div className="relative">
-                            <FaFilter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                             <select
-                                className="pl-10 pr-8 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white cursor-pointer"
+                                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer"
                                 value={filterStatus}
                                 onChange={(e) => setFilterStatus(e.target.value)}
                             >
@@ -246,6 +514,43 @@ const Dashboard = () => {
                                 <option value="in-progress">In Progress</option>
                                 <option value="resolved">Resolved</option>
                                 <option value="closed">Closed</option>
+                            </select>
+                        </div>
+
+                        <div className="relative">
+                            <select
+                                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer"
+                                value={filterSeverity}
+                                onChange={(e) => setFilterSeverity(e.target.value)}
+                            >
+                                <option value="all">All Severity</option>
+                                <option value="critical">Critical</option>
+                                <option value="high">High</option>
+                                <option value="medium">Medium</option>
+                                <option value="low">Low</option>
+                            </select>
+                        </div>
+
+                        <div className="relative">
+                            <select
+                                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer"
+                                value={filterDuplicate}
+                                onChange={(e) => setFilterDuplicate(e.target.value)}
+                            >
+                                <option value="all">All Duplicates</option>
+                                <option value="duplicate">Duplicates Only</option>
+                                <option value="none">Non-Duplicates Only</option>
+                            </select>
+                        </div>
+
+                        <div className="relative">
+                            <select
+                                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer"
+                                value={sortBy}
+                                onChange={(e) => setSortBy(e.target.value)}
+                            >
+                                <option value="severityScoreDesc">Severity (High to Low)</option>
+                                <option value="createdAtDesc">Newest First</option>
                             </select>
                         </div>
                     </div>
@@ -258,14 +563,14 @@ const Dashboard = () => {
                                 <th className="px-6 py-4">Issue Details</th>
                                 <th className="px-6 py-4">Citizen</th>
                                 <th className="px-6 py-4">Status</th>
-                                <th className="px-6 py-4">Priority</th>
+                                <th className="px-6 py-4">AI Severity</th>
                                 <th className="px-6 py-4">Assigned To</th>
                                 <th className="px-6 py-4 text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {filteredIssues.length > 0 ? (
-                                filteredIssues.map((issue) => (
+                            {sortedIssues.length > 0 ? (
+                                sortedIssues.map((issue) => (
                                     <tr key={issue._id} className="hover:bg-gray-50/50 transition-colors">
                                         <td className="px-6 py-4">
                                             <div className="flex items-center gap-3">
@@ -277,8 +582,35 @@ const Dashboard = () => {
                                                     </div>
                                                 )}
                                                 <div>
-                                                    <p className="font-medium text-gray-900 line-clamp-1">{issue.title || 'Untitled Issue'}</p>
-                                                    <p className="text-xs text-gray-500 capitalize">{(issue.category || 'general').replace('_', ' ')}</p>
+                                                    <div className="flex items-center gap-2">
+                                                        <Link to={`/issues/${issue._id}`} className="font-medium text-gray-900 hover:text-blue-600 transition-colors line-clamp-1">
+                                                            {issue.title || 'Untitled Issue'}
+                                                        </Link>
+                                                        <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded flex-shrink-0">
+                                                            #{issue._id ? issue._id.toString().substring(0, 8).toUpperCase() : ''}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 mt-0.5 line-clamp-1 italic">
+                                                        {issue.aiSummaryEn || issue.description}
+                                                    </p>
+                                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                                        <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-bold uppercase tracking-wider">
+                                                            {issue.specificIssueLabel || issue.aiCategory || (issue.category || 'general').replace('_', ' ')}
+                                                        </span>
+                                                        {issue.isIncomplete && (
+                                                            <span className="px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded text-[10px] font-bold flex items-center gap-1 animate-pulse">
+                                                                ⚠️ Needs clarification
+                                                            </span>
+                                                        )}
+                                                        {(issue.duplicateStatus === 'possible_duplicate' || issue.duplicateStatus === 'confirmed_duplicate') && (
+                                                            <Link
+                                                                to={`/issues/${issue.duplicateOf}`}
+                                                                className="px-2 py-0.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-100 rounded text-[10px] font-bold flex items-center gap-1 transition-colors"
+                                                            >
+                                                                🔗 Duplicate ({issue.duplicateStatus === 'confirmed_duplicate' ? 'Confirmed' : 'Possible'})
+                                                            </Link>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                         </td>
@@ -295,12 +627,19 @@ const Dashboard = () => {
                                             </span>
                                         </td>
                                         <td className="px-6 py-4">
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize
-                                            ${issue.priority === 'high' ? 'bg-red-100 text-red-800' :
-                                                    issue.priority === 'medium' ? 'bg-orange-100 text-orange-800' :
-                                                        'bg-green-100 text-green-800'}`}>
-                                                {issue.priority}
-                                            </span>
+                                            {issue.aiProcessingStatus === 'processing' ? (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100 animate-pulse">
+                                                    🤖 AI analyzing...
+                                                </span>
+                                            ) : (
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize border
+                                                    ${issue.severityLabel === 'Critical' ? 'bg-rose-100 text-rose-800 border-rose-200 font-bold' :
+                                                      issue.severityLabel === 'High' ? 'bg-orange-100 text-orange-800 border-orange-200' :
+                                                      issue.severityLabel === 'Medium' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                                                      'bg-emerald-100 text-emerald-800 border-emerald-200'}`}>
+                                                    {issue.severityLabel || 'Low'} ({issue.severityScore || 1})
+                                                </span>
+                                            )}
                                         </td>
                                         <td className="px-6 py-4">
                                             {issue.assignedStaffName ? (
@@ -318,9 +657,15 @@ const Dashboard = () => {
                                             <div className="flex items-center justify-end gap-2">
                                                 {user.role === 'admin' && issue.status === 'pending' && (
                                                     <select
-                                                        onChange={(e) => handleAssignIssue(issue._id, e.target.value)}
-                                                        className="text-xs border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                                        defaultValue=""
+                                                        onChange={(e) => {
+                                                            const selectedStaffId = e.target.value;
+                                                            if (selectedStaffId) {
+                                                                handleAssignIssue(issue, selectedStaffId);
+                                                            }
+                                                            e.target.value = "";
+                                                        }}
+                                                        className="text-xs border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                                                        value=""
                                                     >
                                                         <option value="" disabled>Assign...</option>
                                                         {staff.map((s) => (
@@ -345,9 +690,16 @@ const Dashboard = () => {
                                                         </select>
                                                     )}
 
-                                                <button className="text-gray-400 hover:text-blue-600 transition-colors p-1">
-                                                    <FaUsers />
-                                                </button>
+                                                {canDeleteIssue(issue) && (
+                                                    <button
+                                                        onClick={() => handleDeleteIssue(issue._id)}
+                                                        title="Delete Issue"
+                                                        className="px-2.5 py-1 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                                                    >
+                                                        <FaTrash className="w-3 h-3 text-red-500" />
+                                                        <span>Delete</span>
+                                                    </button>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>
@@ -375,6 +727,88 @@ const Dashboard = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Assign Staff & Internal Note Modal */}
+            {assignModal.isOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-5 border border-gray-100">
+                        <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                            <div className="flex items-center gap-2 text-gray-900 font-extrabold text-lg">
+                                <span>👷</span> Assign Staff & Internal Note
+                            </div>
+                            <button
+                                onClick={() => setAssignModal({ isOpen: false, issueId: null, issueTitle: '', staffId: '', staffName: '', internalNote: '' })}
+                                className="text-gray-400 hover:text-gray-600 text-lg font-bold"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="bg-blue-50 p-3.5 rounded-xl border border-blue-100">
+                                <span className="text-xs font-bold text-blue-600 uppercase tracking-wider block">Target Issue</span>
+                                <span className="text-sm font-bold text-slate-900 line-clamp-1">{assignModal.issueTitle}</span>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                                    Assigned Field Staff Member
+                                </label>
+                                <select
+                                    value={assignModal.staffId}
+                                    onChange={(e) => {
+                                        const found = staff.find(s => s._id === e.target.value);
+                                        setAssignModal(prev => ({ ...prev, staffId: e.target.value, staffName: found ? found.name : '' }));
+                                    }}
+                                    className="w-full text-sm font-medium border border-gray-200 rounded-xl px-3 py-2.5 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                    <option value="" disabled>Select Staff Member...</option>
+                                    {staff.map(s => (
+                                        <option key={s._id} value={s._id}>{s.name} ({s.email})</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                                    <span>📝 Internal Note / Instructions for Staff</span>
+                                    <span className="text-[10px] text-gray-400 font-normal">Visible to Staff & Admin</span>
+                                </label>
+                                <textarea
+                                    rows={3}
+                                    value={assignModal.internalNote}
+                                    onChange={(e) => setAssignModal(prev => ({ ...prev, internalNote: e.target.value }))}
+                                    placeholder="Enter internal instructions for field staff (e.g. Inspect water leak on site immediately, bring heavy repair equipment)..."
+                                    className="w-full text-sm border border-gray-200 rounded-xl p-3 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none"
+                                ></textarea>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
+                            <button
+                                onClick={() => setAssignModal({ isOpen: false, issueId: null, issueTitle: '', staffId: '', staffName: '', internalNote: '' })}
+                                className="px-4 py-2 border border-gray-200 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleConfirmAssign}
+                                disabled={assignMutation.isLoading || !assignModal.staffId}
+                                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                            >
+                                {assignMutation.isLoading ? (
+                                    <>
+                                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                        <span>Assigning...</span>
+                                    </>
+                                ) : (
+                                    <span>Confirm & Assign Staff</span>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

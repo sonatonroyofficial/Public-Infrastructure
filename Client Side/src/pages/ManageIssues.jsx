@@ -29,13 +29,16 @@ const ManageIssues = () => {
         queryFn: () => userAPI.getAllUsers({ role: 'staff' }).then(res => res.data.users || [])
     });
 
+    const [internalNote, setInternalNote] = useState('');
+
     // Assign Mutation
     const assignMutation = useMutation({
-        mutationFn: ({ issueId, staffId }) => issueAPI.assignIssue(issueId, staffId),
+        mutationFn: ({ issueId, staffId, internalNote }) => issueAPI.assignIssue(issueId, staffId, internalNote),
         onSuccess: () => {
             queryClient.invalidateQueries(['allIssuesAdmin']);
             setAssignModal({ isOpen: false, issueId: null });
-            toast.success('Issue assigned successfully');
+            setInternalNote('');
+            toast.success('Issue assigned to staff successfully');
         },
         onError: (error) => {
             toast.error('Error assigning issue: ' + (error.response?.data?.message || 'Failed'));
@@ -57,11 +60,12 @@ const ManageIssues = () => {
     const handleAssignClick = (issueId) => {
         setAssignModal({ isOpen: true, issueId });
         setSelectedStaff('');
+        setInternalNote('');
     };
 
     const confirmAssign = () => {
         if (!selectedStaff) return toast.error('Please select a staff member');
-        assignMutation.mutate({ issueId: assignModal.issueId, staffId: selectedStaff });
+        assignMutation.mutate({ issueId: assignModal.issueId, staffId: selectedStaff, internalNote });
     };
 
     const handleReject = (issueId) => {
@@ -174,16 +178,35 @@ const ManageIssues = () => {
                         <h3 className="text-xl font-bold text-gray-900 mb-4">Assign Staff Member</h3>
                         <p className="text-gray-600 text-sm mb-4">Select a staff member to handle this issue. They will be notified immediately.</p>
 
-                        <select
-                            className="w-full p-3 border border-gray-200 rounded-lg mb-6 focus:ring-2 focus:ring-blue-500 outline-none"
-                            value={selectedStaff}
-                            onChange={(e) => setSelectedStaff(e.target.value)}
-                        >
-                            <option value="">Select Staff...</option>
-                            {staff.map(s => (
-                                <option key={s._id} value={s._id}>{s.name} ({s.email})</option>
-                            ))}
-                        </select>
+                        <div className="space-y-4 mb-6">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Select Staff Member</label>
+                                <select
+                                    className="w-full p-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                    value={selectedStaff}
+                                    onChange={(e) => setSelectedStaff(e.target.value)}
+                                >
+                                    <option value="">Select Staff...</option>
+                                    {staff.map(s => (
+                                        <option key={s._id} value={s._id}>{s.name} ({s.email})</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                    <span>📝 Internal Note / Work Instructions</span>
+                                    <span className="text-[10px] text-gray-400 font-normal">Visible to Staff & Admin</span>
+                                </label>
+                                <textarea
+                                    rows={3}
+                                    value={internalNote}
+                                    onChange={(e) => setInternalNote(e.target.value)}
+                                    placeholder="Enter internal instructions for field staff (e.g. Inspect water leak on site immediately)..."
+                                    className="w-full p-3 text-sm border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                                ></textarea>
+                            </div>
+                        </div>
 
                         <div className="flex gap-3">
                             <button

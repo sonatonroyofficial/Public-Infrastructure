@@ -121,10 +121,15 @@ const AssignedIssues = () => {
                                             <div className="h-10 w-10 rounded bg-gray-200 flex-shrink-0">
                                                 {issue.photos?.[0] && <img src={issue.photos[0]} alt="" className="h-full w-full object-cover rounded" />}
                                             </div>
-                                            <div>
-                                                <div className="font-bold text-gray-900">{issue.title}</div>
-                                                <div className="text-xs text-gray-500">{new Date(issue.createdAt).toLocaleDateString()}</div>
-                                            </div>
+                                             <div>
+                                                 <div className="font-bold text-gray-900">{issue.title}</div>
+                                                 <div className="text-xs text-gray-500">{new Date(issue.createdAt).toLocaleDateString()}</div>
+                                                 {(issue.internalNote || issue.adminNote) && (
+                                                     <div className="mt-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded italic">
+                                                         📝 Note: "{issue.internalNote || issue.adminNote}"
+                                                     </div>
+                                                 )}
+                                             </div>
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
