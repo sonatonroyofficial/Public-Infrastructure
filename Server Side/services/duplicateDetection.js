@@ -1,14 +1,49 @@
-import stringSimilarity from 'string-similarity';
 import openai from '../config/openai.js';
+
+/**
+ * Compares two strings using the Dice Coefficient (bigram similarity).
+ * This is a direct replacement for the deprecated `string-similarity` package.
+ * Returns a value between 0 (no similarity) and 1 (identical).
+ *
+ * @param {string} first
+ * @param {string} second
+ * @returns {number} Similarity score between 0 and 1
+ */
+function compareTwoStrings(first, second) {
+    const s1 = first.toLowerCase().trim();
+    const s2 = second.toLowerCase().trim();
+    if (s1 === s2) return 1;
+    if (s1.length < 2 || s2.length < 2) return 0;
+
+    const getBigrams = (str) => {
+        const bigrams = new Map();
+        for (let i = 0; i < str.length - 1; i++) {
+            const bigram = str.substring(i, i + 2);
+            bigrams.set(bigram, (bigrams.get(bigram) || 0) + 1);
+        }
+        return bigrams;
+    };
+
+    const bigrams1 = getBigrams(s1);
+    const bigrams2 = getBigrams(s2);
+
+    let intersectionSize = 0;
+    for (const [bigram, count] of bigrams1) {
+        const count2 = bigrams2.get(bigram) || 0;
+        intersectionSize += Math.min(count, count2);
+    }
+
+    return (2.0 * intersectionSize) / (s1.length + s2.length - 2);
+}
 
 // Configuration for duplicate detection time window in hours
 const TIME_WINDOW_HOURS = Number(process.env.DUPLICATE_TIME_WINDOW_HOURS) || 48;
 
 /**
  * Calculates the cosine similarity between two vectors.
- * 
- * @param {Array<number>} vecA 
- * @param {Array<number>} vecB 
+ *
+ * @param {Array<number>} vecA
+ * @param {Array<number>} vecB
  * @returns {number} Cosine similarity score between -1 and 1
  */
 function cosineSimilarity(vecA, vecB) {
@@ -78,7 +113,7 @@ export async function findPossibleDuplicates(newReport, db) {
             const candAddress = candidate.location?.address || '';
 
             // PHASE 3.5 PLACEHOLDER: Will be upgraded to real latitude/longitude geocoding calculation later.
-            const locSimilarity = stringSimilarity.compareTwoStrings(
+            const locSimilarity = compareTwoStrings(
                 newAddress.toLowerCase().trim(),
                 candAddress.toLowerCase().trim()
             );
