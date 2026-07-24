@@ -2,7 +2,7 @@
   "name": "public-infrastructure-issue-reporting-system-server-side",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "api/index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js",
@@ -18,7 +18,9 @@
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.0.0",
     "mongoose": "^9.8.0",
-    "nodemon": "^3.1.11",
     "openai": "^6.49.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
   }
 }

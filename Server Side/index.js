@@ -1,46 +1,48 @@
+import dotenv from 'dotenv';
+dotenv.config(); // ✅ Must be FIRST before any process.env access
+
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { MongoClient, ObjectId, ServerApiVersion } from 'mongodb';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import admin from 'firebase-admin';
-import fs from 'fs';
-import path from 'path';
 import { processReportAI } from './services/aiProcessingPipeline.js';
 
 // Firebase Admin Setup
+// In Vercel, set FIREBASE_SERVICE_ACCOUNT env var as the JSON string
+let firebaseInitialized = false;
 const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT;
-let serviceAccount;
 
 if (serviceAccountKey) {
     try {
-        serviceAccount = JSON.parse(serviceAccountKey);
-    } catch (error) {
-        console.error("Error parsing FIREBASE_SERVICE_ACCOUNT:", error);
-    }
-} else {
-    try {
-        const jsonPath = path.resolve("./public-infrastrure-system-firebase-adminsdk.json");
-        if (fs.existsSync(jsonPath)) {
-            const rawData = fs.readFileSync(jsonPath, 'utf8');
-            serviceAccount = JSON.parse(rawData);
+        const serviceAccount = JSON.parse(serviceAccountKey);
+        if (!admin.apps.length) {
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount)
+            });
+            firebaseInitialized = true;
         } else {
-            console.warn("Firebase service account file not found.");
+            firebaseInitialized = true;
         }
     } catch (error) {
-        console.warn("Firebase service account file loading note:", error.message);
+        console.error("Error parsing FIREBASE_SERVICE_ACCOUNT env var:", error.message);
     }
-}
-
-dotenv.config();
-
-if (serviceAccount) {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
 } else {
-    console.warn("Firebase Auth initialized without credentials (might fail in production)");
+    // Local dev fallback: try reading from file using dynamic import (ESM-safe)
+    try {
+        const { createRequire } = await import('module');
+        const require = createRequire(import.meta.url);
+        const serviceAccount = require('./public-infrastrure-system-firebase-adminsdk.json');
+        if (!admin.apps.length) {
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount)
+            });
+            firebaseInitialized = true;
+        }
+    } catch (error) {
+        console.warn("⚠️ Firebase: no credentials found. Firebase Auth will be unavailable.", error.message);
+    }
 }
 
 const app = express();
