@@ -5,10 +5,10 @@ import { MongoClient, ObjectId, ServerApiVersion } from 'mongodb';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import admin from 'firebase-admin';
-import { createRequire } from "module";
+import fs from 'fs';
+import path from 'path';
 import { processReportAI } from './services/aiProcessingPipeline.js';
 
-const require = createRequire(import.meta.url);
 // Firebase Admin Setup
 const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT;
 let serviceAccount;
@@ -21,9 +21,15 @@ if (serviceAccountKey) {
     }
 } else {
     try {
-        serviceAccount = require("./public-infrastrure-system-firebase-adminsdk.json");
+        const jsonPath = path.resolve("./public-infrastrure-system-firebase-adminsdk.json");
+        if (fs.existsSync(jsonPath)) {
+            const rawData = fs.readFileSync(jsonPath, 'utf8');
+            serviceAccount = JSON.parse(rawData);
+        } else {
+            console.warn("Firebase service account file not found.");
+        }
     } catch (error) {
-        console.warn("Firebase service account file not found.");
+        console.warn("Firebase service account file loading note:", error.message);
     }
 }
 
