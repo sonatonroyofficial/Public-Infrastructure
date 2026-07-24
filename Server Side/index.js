@@ -3,46 +3,50 @@ dotenv.config(); // ✅ Must be FIRST before any process.env access
 
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { MongoClient, ObjectId, ServerApiVersion } from 'mongodb';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import admin from 'firebase-admin';
 import { processReportAI } from './services/aiProcessingPipeline.js';
 
-// Firebase Admin Setup
-// In Vercel, set FIREBASE_SERVICE_ACCOUNT env var as the JSON string
+// Firebase Admin Setup — NO top-level await (crashes Vercel serverless)
 let firebaseInitialized = false;
-const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT;
 
-if (serviceAccountKey) {
+if (!admin.apps.length) {
     try {
-        const serviceAccount = JSON.parse(serviceAccountKey);
-        if (!admin.apps.length) {
+        const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT;
+        let serviceAccount;
+
+        if (serviceAccountKey) {
+            // Production: read from env var (Vercel)
+            serviceAccount = JSON.parse(serviceAccountKey);
+        } else {
+            // Local dev: read from JSON file synchronously (no await needed)
+            const __filename = fileURLToPath(import.meta.url);
+            const __dirname = path.dirname(__filename);
+            const jsonPath = path.join(__dirname, 'public-infrastrure-system-firebase-adminsdk.json');
+            if (fs.existsSync(jsonPath)) {
+                serviceAccount = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+            }
+        }
+
+        if (serviceAccount) {
             admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount)
             });
             firebaseInitialized = true;
+            console.log('✅ Firebase Admin initialized');
         } else {
-            firebaseInitialized = true;
+            console.warn('⚠️ Firebase: no credentials found. Set FIREBASE_SERVICE_ACCOUNT env var.');
         }
     } catch (error) {
-        console.error("Error parsing FIREBASE_SERVICE_ACCOUNT env var:", error.message);
+        console.error('❌ Firebase init error:', error.message);
     }
 } else {
-    // Local dev fallback: try reading from file using dynamic import (ESM-safe)
-    try {
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        const serviceAccount = require('./public-infrastrure-system-firebase-adminsdk.json');
-        if (!admin.apps.length) {
-            admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount)
-            });
-            firebaseInitialized = true;
-        }
-    } catch (error) {
-        console.warn("⚠️ Firebase: no credentials found. Firebase Auth will be unavailable.", error.message);
-    }
+    firebaseInitialized = true;
 }
 
 const app = express();
