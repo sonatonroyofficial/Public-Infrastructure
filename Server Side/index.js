@@ -52,46 +52,78 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// MongoDB Connection
-const uri = process.env.MONGODB_URI;
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
-const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
+// Ensure database is connected for incoming requests (crucial for serverless environments)
+app.use(async (req, res, next) => {
+    if (!dbConnected && process.env.MONGODB_URI) {
+        try {
+            await connectToDatabase();
+        } catch (error) {
+            console.error("Database connection middleware error:", error);
+        }
     }
+    next();
 });
 
+// MongoDB Connection
+const uri = process.env.MONGODB_URI;
+let client;
 let db;
 let dbConnected = false;
+let dbPromise = null;
 
 async function connectToDatabase() {
-    try {
-        // Connect the client to the server
-        // await client.connect();
-        // Send a ping to confirm a successful connection
-        // await client.db("admin").command({ ping: 1 });
+    if (dbConnected) return db;
+    if (dbPromise) return dbPromise;
 
-        db = client.db('infrastructure_reporting');
-        dbConnected = true;
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
-
-
-        // Create indexes for better performance
-        await db.collection('users').createIndex({ email: 1 }, { unique: true });
-        await db.collection('issues').createIndex({ status: 1 });
-        await db.collection('issues').createIndex({ citizenId: 1 });
-
-        await seedUsers();
-
-    } catch (error) {
-        console.error('❌ MongoDB connection error:', error);
-        dbConnected = false;
-        console.log("Retrying connection in 5 seconds...");
-        setTimeout(connectToDatabase, 5000);
+    if (!uri) {
+        console.warn("⚠️ MONGODB_URI environment variable is not defined. Skipping connection.");
+        return;
     }
+
+    dbPromise = (async () => {
+        try {
+            if (!client) {
+                client = new MongoClient(uri, {
+                    serverApi: {
+                        version: ServerApiVersion.v1,
+                        strict: true,
+                        deprecationErrors: true,
+                    }
+                });
+            }
+
+            // Connect the client to the server
+            await client.connect();
+            db = client.db('infrastructure_reporting');
+            dbConnected = true;
+            console.log("✅ Successfully connected to MongoDB!");
+
+            // Create indexes for better performance
+            try {
+                await db.collection('users').createIndex({ email: 1 }, { unique: true });
+                await db.collection('issues').createIndex({ status: 1 });
+                await db.collection('issues').createIndex({ citizenId: 1 });
+                await seedUsers();
+            } catch (setupError) {
+                console.error("Warning: Error creating indexes or seeding:", setupError.message);
+            }
+
+            return db;
+        } catch (error) {
+            console.error('❌ MongoDB connection error:', error);
+            dbConnected = false;
+            dbPromise = null; // Reset promise on failure
+            
+            // Only retry with setTimeout if not running on Vercel
+            if (process.env.VERCEL !== '1') {
+                console.log("Retrying connection in 5 seconds...");
+                setTimeout(connectToDatabase, 5000);
+            }
+            throw error;
+        }
+    })();
+
+    return dbPromise;
 }
 
 const seedUsers = async () => {
@@ -152,7 +184,11 @@ const seedUsers = async () => {
     }
 };
 
-connectToDatabase();
+if (process.env.MONGODB_URI) {
+    connectToDatabase().catch(err => console.error("Initial DB connection failed:", err));
+} else {
+    console.warn("⚠️ MONGODB_URI is not defined. Initial database connection skipped.");
+}
 
 // Authentication Middleware
 const authenticateToken = (req, res, next) => {
@@ -1789,6 +1825,8 @@ export default app;
 // Graceful shutdown
 process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down gracefully...');
-    await client.close();
+    if (client) {
+        await client.close();
+    }
     process.exit(0);
 });
