@@ -9,8 +9,8 @@ A comprehensive full-stack web application that empowers citizens to report publ
 - **Website Name**: InfraReport
 - **Admin Email**: `sonaton.fl@gmail.com`
 - **Admin Password**: `sonaton123`
-- **Live Site URL**: [https://public-infrastrure-system.web.app/](http://localhost:5173) *(Currently running locally)*
-- **Backend API**: [https://public-infrastructure-issue-reporti-silk.vercel.app](https://public-infrastructure-issue-reporti-silk.vercel.app)
+- **Live Site URL**: [http://localhost:5173](http://localhost:5173) *(Running locally)*
+- **Backend API**: [http://localhost:5000/api](http://localhost:5000/api)
 
 ---
 
@@ -81,8 +81,8 @@ A comprehensive full-stack web application that empowers citizens to report publ
     ```
 
 4.  **Access the Application**
-    -   Frontend: `https://public-infrastrure-system.web.app/`
-    -   Backend: `https://public-infrastructure-issue-reporti-silk.vercel.app`
+    -   Frontend: `http://localhost:5173`
+    -   Backend: `http://localhost:5000`
 
 ---
 

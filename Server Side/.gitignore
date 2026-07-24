@@ -1,0 +1,5 @@
+.env
+node_modules
+public-infrastrure-system-firebase-adminsdk.json
+.vercel
+.env*.local
