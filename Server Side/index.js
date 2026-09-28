@@ -207,7 +207,7 @@ const authenticateToken = (req, res, next) => {
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) {
-            return res.status(403).json({ message: 'Invalid or expired token' });
+            return res.status(401).json({ message: 'Invalid or expired token' });
         }
         req.user = user;
         next();
@@ -1693,16 +1693,17 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
         if (req.user.role === 'staff') {
             // Staff sees stats for their assigned issues
             const staffId = req.user.userId;
-            const totalAssigned = await db.collection('issues').countDocuments({ assignedTo: staffId });
-            const workingIssues = await db.collection('issues').countDocuments({ assignedTo: staffId, status: 'working' });
-            const inProgressIssues = await db.collection('issues').countDocuments({ assignedTo: staffId, status: 'in-progress' });
-            const resolvedIssues = await db.collection('issues').countDocuments({ assignedTo: staffId, status: 'resolved' });
+            const staffFilter = ObjectId.isValid(staffId) ? { $in: [staffId, new ObjectId(staffId)] } : staffId;
+            const totalAssigned = await db.collection('issues').countDocuments({ assignedTo: staffFilter });
+            const workingIssues = await db.collection('issues').countDocuments({ assignedTo: staffFilter, status: 'working' });
+            const inProgressIssues = await db.collection('issues').countDocuments({ assignedTo: staffFilter, status: 'in-progress' });
+            const resolvedIssues = await db.collection('issues').countDocuments({ assignedTo: staffFilter, status: 'resolved' });
 
             // Today's tasks (updated or assigned today)
             const startOfDay = new Date();
             startOfDay.setHours(0, 0, 0, 0);
             const todaysTasks = await db.collection('issues').countDocuments({
-                assignedTo: staffId,
+                assignedTo: staffFilter,
                 updatedAt: { $gte: startOfDay }
             });
 

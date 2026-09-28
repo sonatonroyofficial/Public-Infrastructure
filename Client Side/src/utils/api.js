@@ -28,11 +28,13 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        if (error.response?.status === 401) {
-            // Token expired or invalid
+        const status = error.response?.status;
+        const msg = (error.response?.data?.message || '').toLowerCase();
+        
+        // Handle expired/invalid token (401 or 403 with token error)
+        if (status === 401 || (status === 403 && (msg.includes('token') || msg.includes('expired') || msg.includes('access denied')))) {
             localStorage.removeItem('token');
             localStorage.removeItem('user');
-            // Check if we are already on login page to avoid loop (though href change will refresh)
             if (window.location.pathname !== '/login') {
                 window.location.href = '/login';
             }

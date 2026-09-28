@@ -21,7 +21,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 const Dashboard = () => {
-    const { user } = useAuth();
+    const { user, logout } = useAuth();
     const queryClient = useQueryClient();
     const [filterStatus, setFilterStatus] = useState('all');
     const [filterSeverity, setFilterSeverity] = useState('all');
@@ -260,7 +260,15 @@ const Dashboard = () => {
             {statsError && (
                 <div className="bg-red-50 p-6 rounded-xl border border-red-100 text-center">
                     <p className="text-red-600 font-medium">Unable to load dashboard statistics.</p>
-                    <button onClick={refetchStats} className="mt-2 text-sm text-red-700 underline hover:text-red-800">Try Again</button>
+                    <p className="text-xs text-red-500 mt-1">Your session or authentication token may have expired or is invalid.</p>
+                    <div className="mt-3 flex justify-center items-center gap-3">
+                        <button onClick={refetchStats} className="px-3 py-1.5 text-xs font-semibold bg-white border border-red-200 text-red-700 rounded-lg hover:bg-red-50 transition-colors">
+                            Try Again
+                        </button>
+                        <button onClick={logout} className="px-3 py-1.5 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">
+                            Log In Again
+                        </button>
+                    </div>
                 </div>
             )}
 
