@@ -2,7 +2,7 @@
   "name": "public-infrastructure-issue-reporting-system-server-side",
   "version": "1.0.0",
   "description": "",
-  "main": "api/index.js",
+  "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js",
